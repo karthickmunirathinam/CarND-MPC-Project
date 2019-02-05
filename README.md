@@ -1,6 +1,8 @@
 # CarND-Controls-MPC
 Self-Driving Car Engineer Nanodegree Program
 
+
+
 ---
 
 ## Dependencies
@@ -38,79 +40,68 @@ Self-Driving Car Engineer Nanodegree Program
 3. Compile: `cmake .. && make`
 4. Run it: `./mpc`.
 
-## Build with Docker-Compose
-The docker-compose can run the project into a container
-and exposes the port required by the simulator to run.
+## Rubric
 
-1. Clone this repo.
-2. Build image: `docker-compose build`
-3. Run Container: `docker-compose up`
-4. On code changes repeat steps 2 and 3.
+### Build
+The code compiles in the Ubuntu 16 machine without errors with cmake and make.
 
-## Tips
+### Model
 
-1. The MPC is recommended to be tested on examples to see if implementation behaves as desired. One possible example
-is the vehicle offset of a straight line (reference). If the MPC implementation is correct, it tracks the reference line after some timesteps(not too many).
-2. The `lake_track_waypoints.csv` file has waypoints of the lake track. This could fit polynomials and points and see of how well your model tracks curve. NOTE: This file might be not completely in sync with the simulator so your solution should NOT depend on it.
-3. For visualization this C++ [matplotlib wrapper](https://github.com/lava/matplotlib-cpp) could be helpful.)
-4.  Tips for setting up your environment are available [here](https://classroom.udacity.com/nanodegrees/nd013/parts/40f38239-66b6-46ec-ae68-03afd8a601c8/modules/0949fca6-b379-42af-a919-ee50aa304e6a/lessons/f758c44c-5e40-4e01-93b5-1a82aa4e044f/concepts/23d376c7-0195-4276-bdf0-e02f1f3c665d)
-5. **VM Latency:** Some students have reported differences in behavior using VM's ostensibly a result of latency.  Please let us know if issues arise as a result of a VM environment.
+The model used in this project is a kinematic bicycle model. This model is non-linear model as it takes changes of direction of drive. This model however do not consider dynamics such as slip angle and slip ratio. The vehicle states is represented by [`x, y, psi, v`], where as the error states is represented by [`cte, epsi`].
+So, basic version of vehicle model is as follow:
+```
+  x[t+1] = x[t] + v[t] * cos(psi[t]) * dt
+  y[t+1] = y[t] + v[t] * sin(psi[t]) * dt
+  psi[t+1] = psi[t] + v[t] / Lf * delta[t] * dt
+  v[t+1] = v[t] + a[t] * dt
+  cte[t+1] = f(x[t]) - y[t] + v[t] * sin(epsi[t]) * dt
+  epsi[t+1] = psi[t] - psides[t] + v[t] * delta[t] / Lf * dt
+```
 
-## Editor Settings
+### Step Length and Elapsed duration
+   The values chosen for N and dt are:
 
-We have kept editor configuration files out of this repo to
-keep it as simple and environment agnostic as possible. However, we recommend
-using the following settings:
+   ```
+   N = 10
+   dt = 0.1
+   ```
 
-* indent using spaces
-* set tab width to 2 spaces (keeps the matrices in source code aligned)
+Based on the recommendation from the lecture and simulation results, If N is small we cannot predict the future well and if the N is choosen too large we plan for long future which is redundant. I have tested  with several values  like 6/0.5  where the car wobbles and large values like 20/0.05 resulted in crash. I have choosen the prediction horizon as 1 sec as ideal case and higher values leads to crash.
 
-## Code Style
+### Polynomial Fitting and MPC Reprocessing
 
-Please (do your best to) stick to [Google's C++ style guide](https://google.github.io/styleguide/cppguide.html).
+   Computations performed in vehicle coordinate system and cooridinates of the waypoints in vehicle coordinates are obtained by following equations:
+   ```
+   X = dX * cos(-psi) - dY * sin (-psi)
+   Y = dX * sin(-psi) + dY * con (-psi)
+   ```
+   where, `dX = (psix[i] - x)`, `dY = (psiy[i] - y)` and `(X, Y)` = coordinates in Vehicle Coordinate System.
 
-## Project Instructions and Rubric
+   Note that initial position of the car and heading direction are always assumed to be Zero in this frame, thus state of the Car in Vehicle Coordinate system can be represented as:
 
-Note: regardless of the changes you make, your project must be buildable using
-cmake and make!
+   ```
+   auto coeffs = polyfit(ptsx_transformed, ptsy_transformed, 3);
+   const double cte = polynomialeval(coeffs, 0);
+   const double epsi = psi - atan(coeffs[1]);
 
-More information is only accessible by people who are already enrolled in Term 2
-of CarND. If you are enrolled, see [the project page](https://classroom.udacity.com/nanodegrees/nd013/parts/40f38239-66b6-46ec-ae68-03afd8a601c8/modules/f1820894-8322-4bb3-81aa-b26b3c6dcbaf/lessons/b1ff3be0-c904-438e-aad3-2b5379f0e0c3/concepts/1a2255a0-e23c-44cf-8d41-39b8a3c8264a)
-for instructions and the project rubric.
+   Eigen::VectorXd state(6);
+   state << 0, 0, 0, v, cte, epsi;
+   ```
 
-## Hints!
+### Model Predictive Control with Latency
 
-* You don't have to follow this directory structure, but if you do, your work
-  will span all of the .cpp files here. Keep an eye out for TODOs.
+   Although in order to take system latency into considerations, I had to compute state values with kinematic model equations. With updated value, I have initialized state.
 
-## Call for IDE Profiles Pull Requests
+   ```
+   double latency = 100;
+   double latency_dt = 1.0 / latency;
+   double x1 = v * cos(0) * latency_dt;
+   double y1 = v * sin(0) * latency_dt;
+   double psi1 = - (v / mpc.Lf) * delta * latency_dt;
+   double v1 = v + (a * latency_dt);
+   double cte1 = cte + (v * sin(epsi) * latency_dt);
+   double epsi1 = epsi - ((v / mpc.Lf) * delta *  latency_dt);
 
-Help your fellow students!
-
-We decided to create Makefiles with cmake to keep this project as platform
-agnostic as possible. We omitted IDE profiles to ensure
-students don't feel pressured to use one IDE or another.
-
-However! I'd love to help people get up and running with their IDEs of choice.
-If you've created a profile for an IDE you think other students would
-appreciate, we'd love to have you add the requisite profile files and
-instructions to ide_profiles/. For example if you wanted to add a VS Code
-profile, you'd add:
-
-* /ide_profiles/vscode/.vscode
-* /ide_profiles/vscode/README.md
-
-The README should explain what the profile does, how to take advantage of it,
-and how to install it.
-
-Frankly, I've never been involved in a project with multiple IDE profiles
-before. I believe the best way to handle this would be to keep them out of the
-repo root to avoid clutter. Most profiles will include
-instructions to copy files to a new location to get picked up by the IDE, but
-that's just a guess.
-
-One last note here: regardless of the IDE used, every submitted project must
-still be compilable with cmake and make./
-
-## How to write a README
-A well written README file can enhance your project and portfolio and develop your abilities to create professional README files by completing [this free course](https://www.udacity.com/course/writing-readmes--ud777).
+   Eigen::VectorXd state(6);
+   state << x1, y1, psi1, v1, cte1, epsi1;
+   ```
